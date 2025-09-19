@@ -42,7 +42,7 @@ Public Class AddInEvents
         ' for finding out what happened attach internal trace to ExcelDNA LogDisplay
         PyAddin.theLogDisplaySource = New TraceSource("ExcelDna.Integration")
 
-        initScriptExecutables()
+        initPyInstallations()
         Dim Wb As Workbook = Application.ActiveWorkbook
         If Wb IsNot Nothing Then
             Dim errStr As String = doDefinitions(Wb)
@@ -79,15 +79,13 @@ Public Class AddInEvents
             If errStr <> vbNullString Then PyAddin.UserMsg("Error while getScriptDefinitions (dropdown selected !) in Workbook_Save: " + errStr, True, True)
         Else
             errStr = doDefinitions(Wb) ' includes getScriptDefinitions - for top sorted ScriptDefinition
-            If errStr = "no ScriptAddinNames" Then Exit Sub
+            If errStr = "no PyScript Definitions" Then Exit Sub
             If errStr <> vbNullString Then
                 PyAddin.UserMsg("Error when getting definitions in Workbook_Save: " + errStr, True, True)
                 Exit Sub
             End If
         End If
         PyAddin.avoidFurtherMsgBoxes = False
-        PyAddin.storeArgs()
-        PyAddin.removeResultsDiags() ' remove results specified by rres
     End Sub
 
     ''' <summary>refresh ribbon is being treated in Workbook_Activate...</summary>
@@ -98,7 +96,7 @@ Public Class AddInEvents
     Private Sub Workbook_Activate(Wb As Workbook) Handles Application.WorkbookActivate
         Dim errStr As String = doDefinitions(Wb)
         PyAddin.dropDownSelected = False
-        If errStr = "no PyAddinNames" Then
+        If errStr = "no PyScript Definitions" Then
             PyAddin.resetScriptDefinitions()
         ElseIf errStr <> vbNullString Then
             PyAddin.UserMsg("Error when getting definitions in Workbook_Activate: " + errStr, True, True)
@@ -115,7 +113,7 @@ Public Class AddInEvents
         ScriptDefinitionRange = Nothing
         ' get the defined ScriptAddin Names
         errStr = PyAddin.getScriptNames()
-        If errStr = "no PyAddinNames" Then Return errStr
+        If errStr = "no PyScript Definitions" Then Return errStr
         If errStr <> vbNullString Then
             Return "Error while getScriptNames in doDefinitions: " + errStr
         End If
@@ -180,22 +178,21 @@ Public Class AddInEvents
     End Sub
 
     ''' <summary>common click handler for all command buttons</summary>
-    ''' <param name="cbName">name of command button, defines whether a script is invoked (starts with Py_)</param>
+    ''' <param name="cbName">name of command button, defines whether a script is invoked (starts with PyScript_)</param>
     Private Shared Sub cbClick(cbName As String)
         Dim errStr As String
         ' set PyDefinition to callers range
         Try
             PyAddin.ScriptDefinitionRange = ExcelDna.Integration.ExcelDnaUtil.Application.Range(cbName)
         Catch ex As Exception
-            PyAddin.UserMsg("No range " + cbName + " (Py definitions) found !", True, True)
+            PyAddin.UserMsg("No range " + cbName + " (PyScript definition) found !", True, True)
             Exit Sub
         End Try
-        PyAddin.SkipScriptAndPreparation = My.Computer.Keyboard.CtrlKeyDown
         Dim origSelection As Range = ExcelDna.Integration.ExcelDnaUtil.Application.Selection
         Try
             PyAddin.ScriptDefinitionRange.Parent.Select()
         Catch ex As Exception
-            PyAddin.UserMsg("Selection of worksheet of Py Definition Range not possible (probably because you're editing a cell)!", True, True)
+            PyAddin.UserMsg("Selection of worksheet of PyScript Definition Range not possible (probably because you're editing a cell)!", True, True)
         End Try
         PyAddin.ScriptDefinitionRange.Select()
         errStr = PyAddin.startScriptprocess()
@@ -217,7 +214,7 @@ Public Class AddInEvents
                     ' Associate click-handler with all click events of the CommandButtons.
                     Dim ctrlName As String
                     Try : ctrlName = Sh.OLEObjects(shp.Name).Object.Name : Catch ex As Exception : ctrlName = "" : End Try
-                    If Left(ctrlName, 7) = "Py_" Then
+                    If Left(ctrlName, 9) = "PyScript_" Then
                         ' check if script range actually exists and has three columns
                         Dim testRange As Excel.Range
                         Try
@@ -248,7 +245,7 @@ Public Class AddInEvents
                         ElseIf cb0 Is Nothing Then
                             cb0 = Sh.OLEObjects(shp.Name).Object
                         Else
-                            UserMsg("Only max. of 10 Py-Addin Buttons are allowed on a Worksheet, currently in use: " + collShpNames + " !")
+                            UserMsg("Only max. of 10 PyAddin Buttons are allowed on a Worksheet, currently in use: " + collShpNames + " !")
                             assignHandler = False
                             Exit For
                         End If

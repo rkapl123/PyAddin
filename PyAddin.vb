@@ -1,29 +1,25 @@
-﻿Imports Microsoft.Office.Interop.Excel
+﻿Imports ExcelDna.Integration
+Imports Microsoft.Office.Interop.Excel
 Imports System.Collections.Generic
+Imports System.Collections.Specialized
 Imports System.Configuration
+Imports System.Diagnostics
 Imports System.IO
 Imports System.Text
 Imports System.Threading.Tasks
-Imports ExcelDna.Integration
-Imports System.Diagnostics
-Imports System.Collections.Specialized
 
 
 ''' <summary>The main functions for working with ScriptDefinitions (named ranges in Excel) and starting the Script processes (writing input, invoking scripts and retrieving results)</summary>
 Public Module PyAddin
-    ''' <summary>script type for calling scripts (could be R, perl, etc)</summary>
-    Public ScriptType As String
-    ''' <summary>executable name for calling scripts</summary>
-    Public ScriptExec As String
-    ''' <summary>optional arguments to executable for calling scripts</summary>
-    Public ScriptExecArgs As String
-    ''' <summary>optional additional path settings for ScriptExec</summary>
-    Public ScriptExecAddPath As String
-    ''' <summary>optional additional environment settings for ScriptExec</summary>
-    Public ScriptExecAddEnvironVars As New Dictionary(Of String, String)
-    ''' <summary>If Script engine writes to StdError, regard this as an error for further processing (some write to StdError in case of no error)</summary>
-    Public StdErrMeansError As Boolean
-    ''' <summary>for ScriptAddin invocations by executeScript, this is set to true, avoiding a MsgBox</summary>
+    ''' <summary>selected environment number for the fixed selectable python installations</summary>
+    Public PyInstallation As Integer
+    ''' <summary>library name for executing python scripts</summary>
+    Public PyLib As String = ""
+    ''' <summary>optional additional virtual environment path for PyLib</summary>
+    Public PyVenv As String = ""
+    ''' <summary>optional additional environment settings for PyLib</summary>
+    Public PyAddEnvironVars As New Dictionary(Of String, String)
+    ''' <summary>for PyAddin invocations by executeScript, this is set to true, avoiding a MsgBox</summary>
     Public nonInteractive As Boolean = False
     ''' <summary>collect non interactive error messages here</summary>
     Public nonInteractiveErrMsgs As String
@@ -31,10 +27,10 @@ Public Module PyAddin
     Public DebugAddin As Boolean
     ''' <summary>The path where the User specific settings (overrides) can be found</summary>
     Public UserSettingsPath As String
-    ''' <summary>skip script preparation and execution</summary>
-    Public SkipScriptAndPreparation As Boolean
-    ''' <summary>indicates an error in execution of DBModifiers, used for commit/rollback and for non interactive message return</summary>
+    ''' <summary>indicates an error in execution of script, used for non interactive message return</summary>
     Public hadError As Boolean
+    ''' <summary></summary>
+    Public StdErrMeansError As Boolean
     ''' <summary>the LogDisplay (Diagnostic Display) log source</summary>
     Public theLogDisplaySource As TraceSource
 
@@ -69,8 +65,6 @@ Public Module PyAddin
     Public ScriptDefDic As New Dictionary(Of String, String())
     ''' <summary>currently running scripts to prevent repeated invocations </summary>
     Public ScriptRunDic As New Dictionary(Of Integer, Boolean)
-    ''' <summary>file suffix for currently selected ScriptType</summary>
-    Private ScriptFileSuffix As String
 
     ''' <summary>startRprocess: started from GUI (button) and accessible from VBA (via Application.Run)</summary>
     ''' <returns>Error message or null string in case of success</returns>
@@ -80,18 +74,12 @@ Public Module PyAddin
         ' get the definition range
         errStr = getScriptDefinitions()
         If errStr <> vbNullString Then Return "Failed getting ScriptDefinitions: " + errStr
-        If SkipScriptAndPreparation Then
-            finishScriptprocess()
-        Else
-            Try
-                If Not removeFiles() Then Return vbNullString
-                If Not storeArgs() Then Return vbNullString
-                If Not storeScriptRng() Then Return vbNullString
-                If Not invokeScripts() Then Return vbNullString
-            Catch ex As Exception
-                Return "Exception in ScriptDefinitions preparation and execution: " + ex.Message + ex.StackTrace
-            End Try
-        End If
+        Try
+            If Not storeScriptRng() Then Return vbNullString
+            If Not invokeScripts() Then Return vbNullString
+        Catch ex As Exception
+            Return "Exception in ScriptDefinitions preparation and execution: " + ex.Message + ex.StackTrace
+        End Try
         ' all is OK = return null string
         Return vbNullString
     End Function
@@ -127,19 +115,6 @@ Public Module PyAddin
         Return "" ' no error, no message
     End Function
 
-    ''' <summary>After all script invocations have finished, this is called to get the results and diagrams into the current excel workbook</summary>
-    ''' <returns>Error message or null string in case of success</returns>
-    Public Function finishScriptprocess() As String
-        Try
-            If Not getResults() Then Return vbNullString
-            If Not getDiags() Then Return vbNullString
-        Catch ex As Exception
-            Return "Exception in ScriptDefinitions finalization: " + ex.Message + ex.StackTrace
-        End Try
-        ' all is OK = return null string
-        Return vbNullString
-    End Function
-
     ''' <summary>refresh ScriptNames from Workbook on demand (currently when invoking about box)</summary>
     ''' <returns>Error message or null string in case of success</returns>
     Public Function startScriptNamesRefresh() As String
@@ -149,7 +124,7 @@ Public Module PyAddin
         ScriptDefinitionRange = Nothing
         ' get the defined Script_/R_Addin Names
         errStr = getScriptNames()
-        If errStr = "no ScriptAddinNames" Then
+        If errStr = "no PyScript Definitions" Then
             Return vbNullString
         ElseIf errStr <> vbNullString Then
             Return "Error while getting Script in startScriptNamesRefresh: " + errStr
@@ -168,10 +143,10 @@ Public Module PyAddin
         Dim i As Integer = 0
         For Each namedrange As Name In currWb.Names
             Dim cleanname As String = Replace(namedrange.Name, namedrange.Parent.Name & "!", "")
-            If Left(cleanname, 7) = "Script_" Or Left(cleanname, 7) = "R_Addin" Then
+            If Left(cleanname, 9) = "PyScript_" Then
                 Dim prefix As String = Left(cleanname, 7)
-                If InStr(namedrange.RefersTo, "#REF!") > 0 Then Return "ScriptDefinitions range " + namedrange.Parent.name + "!" + namedrange.Name + " contains #REF!"
-                If namedrange.RefersToRange.Columns.Count <> 3 Then Return "ScriptDefinitions range " + namedrange.Parent.name + "!" + namedrange.Name + " doesn't have 3 columns !"
+                If InStr(namedrange.RefersTo, "#REF!") > 0 Then Return "PyScriptDefinitions range " + namedrange.Parent.name + "!" + namedrange.Name + " contains #REF!"
+                If namedrange.RefersToRange.Columns.Count <> 3 Then Return "PyScriptDefinitions range " + namedrange.Parent.name + "!" + namedrange.Name + " doesn't have 3 columns !"
                 ' final name of entry is without Script_/R_Addin and !
                 Dim finalname As String = Replace(Replace(namedrange.Name, prefix, ""), "!", "")
                 Dim nodeName As String = Replace(Replace(namedrange.Name, prefix, ""), namedrange.Parent.Name & "!", "")
@@ -202,7 +177,7 @@ Public Module PyAddin
                 End If
             End If
         Next
-        If UBound(Scriptcalldefnames) = -1 Then Return "no ScriptAddinNames"
+        If UBound(Scriptcalldefnames) = -1 Then Return "no PyScript Definitions"
         Return vbNullString
     End Function
 
@@ -210,17 +185,11 @@ Public Module PyAddin
     Public Sub resetScriptDefinitions()
         ScriptDefDic("args") = {}
         ScriptDefDic("argspaths") = {}
-        ScriptDefDic("results") = {}
-        ScriptDefDic("rresults") = {}
-        ScriptDefDic("resultspaths") = {}
-        ScriptDefDic("diags") = {}
-        ScriptDefDic("diagspaths") = {}
         ScriptDefDic("scripts") = {}
-        ScriptDefDic("skipscripts") = {}
         ScriptDefDic("scriptspaths") = {}
         ScriptDefDic("scriptrng") = {}
         ScriptDefDic("scriptrngpaths") = {}
-        ScriptExec = Nothing : dirglobal = vbNullString
+        dirglobal = vbNullString
     End Sub
 
     ''' <summary>gets definitions from current selected script invocation range (ScriptDefinitions)</summary>
@@ -228,12 +197,8 @@ Public Module PyAddin
     Public Function getScriptDefinitions() As String
         resetScriptDefinitions()
         Try
-            ScriptExecArgs = "" ' reset ScriptExec arguments as they might have been set elsewhere...
-            ScriptExec = Nothing ' same for ScriptExec and other settings
-            ScriptExecAddPath = ""
-            ScriptFileSuffix = ""
-            StdErrMeansError = True
-            If IsNothing(ScriptDefinitionRange) Then Return "No ScriptDefinitionRange available!"
+            Dim reInitPython As Boolean = False
+            If IsNothing(ScriptDefinitionRange) Then Return "No PyScriptDefinitionRange available!"
             For Each defRow As Range In ScriptDefinitionRange.Rows
                 Dim deftype As String, defval As String, deffilepath As String
                 deftype = LCase(defRow.Cells(1, 1).Value2)
@@ -241,38 +206,38 @@ Public Module PyAddin
                 defval = If(defval = vbNullString, "", defval)
                 deffilepath = defRow.Cells(1, 3).Value2
                 deffilepath = If(deffilepath = vbNullString, "", deffilepath)
-                If (deftype = "exec" Or deftype = "rexec") Then
-                    If defval <> "" Then
-                        ScriptExec = defval
-                        ScriptExecArgs = deffilepath
+                If (deftype = "pylib") Then
+                    If defval <> "" And PyLib <> defval Then
+                        PyLib = defval
+                        reInitPython = True
                     End If
-                ElseIf deftype = "skipscript" Or deftype = "script" Then
+                ElseIf deftype = "script" Then
                     If defval <> "" Then
                         ReDim Preserve ScriptDefDic("scripts")(ScriptDefDic("scripts").Length)
                         ScriptDefDic("scripts")(ScriptDefDic("scripts").Length - 1) = defval
                         ReDim Preserve ScriptDefDic("scriptspaths")(ScriptDefDic("scriptspaths").Length)
                         ScriptDefDic("scriptspaths")(ScriptDefDic("scriptspaths").Length - 1) = deffilepath
-                        ReDim Preserve ScriptDefDic("skipscripts")(ScriptDefDic("skipscripts").Length)
-                        ScriptDefDic("skipscripts")(ScriptDefDic("skipscripts").Length - 1) = (deftype = "skipscript")
                     End If
                 ElseIf deftype = "path" And defval <> "" Then
-                    If defval <> "" Then
-                        ScriptExecAddPath = defval
-                        ScriptFileSuffix = deffilepath
+                    If defval <> "" And PyVenv <> defval Then
+                        PyVenv = defval
+                        reInitPython = True
                     End If
                 ElseIf deftype = "envvar" And defval <> "" Then
                     If defval <> "" Then
-                        ScriptExecAddEnvironVars(defval) = deffilepath
+                        PyAddEnvironVars(defval) = deffilepath
                     End If
-                ElseIf deftype = "type" Then
-                    If ScriptExecutables.Contains(defval) Then
-                        ScriptType = defval
-                        theMenuHandler.selectedScriptExecutable = ScriptExecutables.IndexOf(ScriptType)
+                ElseIf deftype = "pyInst" Then
+                    If PyInstallations.Contains(defval) And PyInstallation <> defval Then
+                        PyInstallation = defval
+                        PyLib = fetchSetting("PyLib" + PyInstallation, "")
+                        PyVenv = fetchSetting("PyVenv" + PyInstallation, "")
+                        reInitPython = True
+                        theMenuHandler.selectedPyExecutable = PyInstallations.IndexOf(PyInstallation)
                         ' not really important if not set at startup of addin (timing problem as ribbon is not loaded here)
-                        Try : theRibbon.InvalidateControl("execDropDown") : Catch ex As Exception : End Try
-                        StdErrMeansError = Not (deffilepath.ToLower() = "n" Or deffilepath.ToLower() = "no")
+                        Try : theRibbon.InvalidateControl("pyInstDropDown") : Catch ex As Exception : End Try
                     Else
-                        Return "Error in setting type, not contained in available types/executables (check AppSettings for available ExePath<> entries)!"
+                        Return "Error in setting type, " + defval + " is not contained in available python installations (check AppSettings for available PyLib<> entries)!"
                     End If
                 ElseIf deftype = "arg" Then
                     ReDim Preserve ScriptDefDic("args")(ScriptDefDic("args").Length)
@@ -285,52 +250,26 @@ Public Module PyAddin
                     ReDim Preserve ScriptDefDic("scriptrngpaths")(ScriptDefDic("scriptrngpaths").Length)
                     ScriptDefDic("scriptrngpaths")(ScriptDefDic("scriptrngpaths").Length - 1) = deffilepath
                     ' don't set skipscripts here to False as this is done in method storeScriptRng
-                ElseIf deftype = "res" Or deftype = "rres" Then
-                    ReDim Preserve ScriptDefDic("rresults")(ScriptDefDic("rresults").Length)
-                    ScriptDefDic("rresults")(ScriptDefDic("rresults").Length - 1) = (deftype = "rres")
-                    ReDim Preserve ScriptDefDic("results")(ScriptDefDic("results").Length)
-                    ScriptDefDic("results")(ScriptDefDic("results").Length - 1) = defval
-                    ReDim Preserve ScriptDefDic("resultspaths")(ScriptDefDic("resultspaths").Length)
-                    ScriptDefDic("resultspaths")(ScriptDefDic("resultspaths").Length - 1) = deffilepath
-                ElseIf deftype = "diag" Then
-                    ReDim Preserve ScriptDefDic("diags")(ScriptDefDic("diags").Length)
-                    ScriptDefDic("diags")(ScriptDefDic("diags").Length - 1) = defval
-                    ReDim Preserve ScriptDefDic("diagspaths")(ScriptDefDic("diagspaths").Length)
-                    ScriptDefDic("diagspaths")(ScriptDefDic("diagspaths").Length - 1) = deffilepath
                 ElseIf deftype = "dir" Then
                     dirglobal = defval
                 ElseIf deftype <> "" Then
                     Return "Error in getScriptDefinitions: invalid type '" + deftype + "' found in script definition!"
                 End If
             Next
-            ' get default ScriptExec path from user (or overridden in appSettings tag as redirect to global) settings. This can be overruled by individual script exec settings in ScriptDefinitions
-            If ScriptExec Is Nothing Then ScriptExec = fetchSetting("ExePath" + ScriptType, "")
-            If ScriptExecAddPath = "" Then ScriptExecAddPath = fetchSetting("PathAdd" + ScriptType, "")
-            If fetchSetting("EnvironVarName" + ScriptType, "") <> "" Then
-                If Not ScriptExecAddEnvironVars.ContainsKey(fetchSetting("EnvironVarName" + ScriptType, "")) Then
-                    ScriptExecAddEnvironVars(fetchSetting("EnvironVarName" + ScriptType, "")) = fetchSetting("EnvironVarValue" + ScriptType, "")
+            If fetchSetting("EnvironVarName" + PyInstallation, "") <> "" Then
+                If Not PyAddEnvironVars.ContainsKey(fetchSetting("EnvironVarName" + PyInstallation, "")) Then
+                    PyAddEnvironVars(fetchSetting("EnvironVarName" + PyInstallation, "")) = fetchSetting("EnvironVarValue" + PyInstallation, "")
                 End If
             End If
-            If ScriptFileSuffix = "" Then ScriptFileSuffix = fetchSetting("FSuffix" + ScriptType, "")
-            If ScriptExecArgs = "" Then ScriptExecArgs = fetchSetting("ExeArgs" + ScriptType, "")
-            If ScriptExec = "" Then Return "Error in getScriptDefinitions: ScriptExec not defined (check AppSettings for available ExePath<> entries)"
+            If PyLib = "" Then Return "Error in getScriptDefinitions: PyLib not defined (check AppSettings for available PyLib<> entries)"
             If ScriptDefDic("scripts").Length = 0 And ScriptDefDic("scriptrng").Length = 0 Then Return "Error in getScriptDefinitions: no script(s) or scriptRng(s) defined in " + ScriptDefinitionRange.Name.Name
-            If StdErrMeansError Then StdErrMeansError = CBool(fetchSetting("StdErrX" + ScriptType, "True"))
+            If reInitPython Then PythonCaller.InitPython()
         Catch ex As Exception
             Return "Error in getScriptDefinitions: " + ex.Message
         End Try
         Return vbNullString
     End Function
 
-    ''' <summary>remove results in all result Ranges (before saving)</summary>
-    Public Sub removeResultsDiags()
-        For Each namedrange As Name In currWb.Names
-            If Left(namedrange.Name, 15) = "___ScriptResult" Or Left(namedrange.Name, 15) = "___RaddinResult" Then
-                namedrange.RefersToRange.ClearContents()
-                namedrange.Delete()
-            End If
-        Next
-    End Sub
 
     ''' <summary>prepare parameter (script, args, results, diags) for usage in invokeScripts, storeArgs, getResults and getDiags</summary>
     ''' <param name="index">index of parameter to be prepared in ScriptDefDic</param>
@@ -347,7 +286,7 @@ Public Module PyAddin
         If InStr(value, ".") > 0 Then ext = ""
         ' only for args, results and diags (scripts don't have a target range)
         Dim ScriptDataRangeAddress As String = ""
-        If name = "args" Or name = "results" Or name = "diags" Or name = "scriptrng" Then
+        If name = "scriptrng" Then
             Try
                 ScriptDataRange = currWb.Names.Item(value).RefersToRange
                 ScriptDataRangeAddress = ScriptDataRange.Parent.Name + "!" + ScriptDataRange.Address
@@ -371,65 +310,6 @@ Public Module PyAddin
         Return vbNullString
     End Function
 
-    ''' <summary>creates Input files for defined arg ranges, tab separated, decimal point always ".", dates are stored as "yyyy-MM-dd"
-    ''' otherwise: "what you see is what you get"
-    '''</summary>
-    ''' <returns>True if success, False otherwise</returns>
-    Public Function storeArgs() As Boolean
-        Dim argFilename As String = vbNullString, argdir As String
-        Dim ScriptDataRange As Range = Nothing
-        Dim outputFile As StreamWriter = Nothing
-
-        argdir = dirglobal
-        For c As Integer = 0 To ScriptDefDic("args").Length - 1
-            Try
-                Dim errMsg As String
-                errMsg = prepareParam(c, "args", ScriptDataRange, argFilename, argdir, ".txt")
-                If Len(errMsg) > 0 Then
-                    If Not PyAddin.UserMsg(errMsg) Then Return False
-                End If
-
-                ' absolute paths begin with \\ or X:\ -> don't prefix with currWB path, else currWBpath\argdir
-                Dim curWbPrefix As String = IIf(Left(argdir, 2) = "\\" Or Mid(argdir, 2, 2) = ":\", "", currWb.Path + "\")
-                outputFile = New StreamWriter(curWbPrefix + argdir + "\" + argFilename)
-                ' make sure we're writing a dot decimal separator
-                Dim customCulture As System.Globalization.CultureInfo
-                customCulture = System.Threading.Thread.CurrentThread.CurrentCulture.Clone()
-                customCulture.NumberFormat.NumberDecimalSeparator = "."
-                System.Threading.Thread.CurrentThread.CurrentCulture = customCulture
-
-                ' write the ScriptDataRange to file
-                Dim i As Integer = 1
-                Do
-                    Dim j As Integer = 1
-                    Dim writtenLine As String = ""
-                    If ScriptDataRange(i, 1).Value2 IsNot Nothing Then
-                        Do
-                            Dim printedValue As String
-                            If ScriptDataRange(i, j).NumberFormat.ToString().Contains("yy") Then
-                                printedValue = DateTime.FromOADate(ScriptDataRange(i, j).Value2).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
-                            ElseIf IsNumeric(ScriptDataRange(i, j).Value2) Then
-                                printedValue = String.Format("{0:###################0.################}", ScriptDataRange(i, j).Value2)
-                            Else
-                                printedValue = ScriptDataRange(i, j).Value2
-                            End If
-                            writtenLine += printedValue + vbTab
-                            j += +1
-                        Loop Until j > ScriptDataRange.Columns.Count
-                        outputFile.WriteLine(Left(writtenLine, Len(writtenLine) - 1))
-                    End If
-                    i += 1
-                Loop Until i > ScriptDataRange.Rows.Count
-                LogInfo("stored args to " + curWbPrefix + argdir + "\" + argFilename)
-            Catch ex As Exception
-                If outputFile IsNot Nothing Then outputFile.Close()
-                If Not PyAddin.UserMsg("Error occurred when creating input file '" + argFilename + "', " + ex.Message + " (maybe defined the wrong cell format for values?)",, True) Then Return False
-            End Try
-            If outputFile IsNot Nothing Then outputFile.Close()
-        Next
-        Return True
-    End Function
-
     ''' <summary>creates script files for defined scriptRng ranges</summary>
     ''' <returns>True if success, False otherwise</returns>
     Public Function storeScriptRng() As Boolean
@@ -444,9 +324,9 @@ Public Module PyAddin
                 ' scriptrng beginning with a "=" is a scriptcell (as defined in getScriptDefinitions) ...
                 If Left(ScriptDefDic("scriptrng")(c), 1) = "=" Then
                     scriptText = ScriptDefDic("scriptrng")(c).Substring(1)
-                    scriptRngFilename = "ScriptDataRangeRow" + c.ToString() + ScriptFileSuffix
+                    scriptRngFilename = "ScriptDataRangeRow" + c.ToString() + ".pl"
                 Else
-                    ErrMsg = prepareParam(c, "scriptrng", ScriptDataRange, scriptRngFilename, scriptRngdir, ScriptFileSuffix)
+                    ErrMsg = prepareParam(c, "scriptrng", ScriptDataRange, scriptRngFilename, scriptRngdir, ".pl")
                     If Len(ErrMsg) > 0 Then
                         If Not PyAddin.UserMsg(ErrMsg) Then Return False
                     End If
@@ -558,306 +438,9 @@ Public Module PyAddin
                          ' reflect running state in debug label...
                          PyAddin.theRibbon.InvalidateControl("debug")
                      Next
-
-                     ' after all scripts were finished and no ErrMsg from prepareParam or script, continue with result collection
-                     If ErrMsg = "" Then
-                         PyAddin.finishScriptprocess()
-                     Else
-                         PyAddin.UserMsg("Errors occurred in script (see log), no returned results/diagrams will be fetched !", True, True)
-                     End If
                      ' reset current dir
                      Directory.SetCurrentDirectory(previousDir)
                  End Function)
-        Return True
-    End Function
-
-    ''' <summary>get Output files for defined results ranges, tab separated
-    ''' otherwise:  "what you see is what you get"
-    ''' </summary>
-    ''' <returns>True if success, False otherwise</returns>
-    Public Function getResults() As Boolean
-        Dim resFilename As String = vbNullString, readdir As String
-        Dim ScriptDataRange As Range = Nothing
-        Dim previousResultRange As Range
-        Dim errMsg As String
-
-        readdir = dirglobal
-        For c As Integer = 0 To ScriptDefDic("results").Length - 1
-            errMsg = prepareParam(c, "results", ScriptDataRange, resFilename, readdir, ".txt")
-            If Len(errMsg) > 0 Then
-                If Not PyAddin.UserMsg(errMsg,, True) Then Return False
-            End If
-
-            ' absolute paths begin with \\ or X:\ -> don't prefix with currWB path, else currWBpath\readdir
-            Dim curWbPrefix As String = IIf(Left(readdir, 2) = "\\" Or Mid(readdir, 2, 2) = ":\", "", currWb.Path + "\")
-            If Not File.Exists(curWbPrefix + readdir + "\" + resFilename) Then
-                If Not PyAddin.UserMsg("Results file '" + curWbPrefix + readdir + "\" + resFilename + "' not found!",, True) Then Return False
-            End If
-            ' remove previous content, might not exist, so catch any exception
-            If ScriptDefDic("rresults")(c) Then
-                Try
-                    previousResultRange = currWb.Names.Item("___ScriptResult" + ScriptDefDic("results")(c)).RefersToRange
-                    previousResultRange.ClearContents()
-                Catch ex As Exception : End Try
-                ' legacy R add-in results
-                Try
-                    previousResultRange = currWb.Names.Item("___RaddinResult" + ScriptDefDic("results")(c)).RefersToRange
-                    previousResultRange.ClearContents()
-                Catch ex As Exception : End Try
-            Else ' if we changed from rresults to results, need to remove hidden ___ScriptResult name, otherwise results would still be removed when saving
-                Try
-                    currWb.Names.Item("___ScriptResult" + ScriptDefDic("results")(c)).Delete()
-                Catch ex As Exception : End Try
-                ' legacy R add-in results
-                Try
-                    currWb.Names.Item("___RaddinResult" + ScriptDefDic("results")(c)).Delete()
-                Catch ex As Exception : End Try
-            End If
-
-            Try
-                Dim newQueryTable As QueryTable
-                newQueryTable = ScriptDataRange.Worksheet.QueryTables.Add(Connection:="TEXT;" & curWbPrefix + readdir + "\" + resFilename, Destination:=ScriptDataRange)
-                '                    .TextFilePlatform = 850
-                With newQueryTable
-                    .Name = "ScriptAddinResultData"
-                    .FieldNames = True
-                    .RowNumbers = False
-                    .FillAdjacentFormulas = False
-                    .PreserveFormatting = True
-                    .RefreshOnFileOpen = False
-                    .RefreshStyle = XlCellInsertionMode.xlOverwriteCells
-                    .SavePassword = False
-                    .SaveData = True
-                    .AdjustColumnWidth = False
-                    .RefreshPeriod = 0
-                    .TextFileStartRow = 1
-                    .TextFileParseType = XlTextParsingType.xlDelimited
-                    .TextFileTabDelimiter = True
-                    .TextFileSpaceDelimiter = False
-                    .TextFileSemicolonDelimiter = False
-                    .TextFileCommaDelimiter = False
-                    .TextFileDecimalSeparator = "."
-                    .TextFileThousandsSeparator = ","
-                    .TextFileTrailingMinusNumbers = True
-                    .Refresh(BackgroundQuery:=False)
-                End With
-                If ScriptDefDic("rresults")(c) Then
-                    currWb.Names.Add(Name:="___ScriptResult" + ScriptDefDic("results")(c), RefersTo:=newQueryTable.ResultRange, Visible:=False)
-                End If
-                ' to avoid "hanging" names (Data) which add up quickly, try to remove the actually given name (could also be Data_1 if Data already exists) both from workbook and from current sheet
-                Try : currWb.Names.Item(newQueryTable.Name).Delete() : Catch ex As Exception : End Try
-                Try : ScriptDataRange.Worksheet.Names.Item(newQueryTable.Name).Delete() : Catch ex As Exception : End Try
-                newQueryTable.Delete()
-                LogInfo("inserted results from " + curWbPrefix + readdir + "\" + resFilename)
-            Catch ex As Exception
-                If Not PyAddin.UserMsg("Error in placing results in to Excel: " + ex.Message,, True) Then Return False
-            End Try
-        Next
-        Return True
-    End Function
-
-    ''' <summary>get Output diagrams (png) for defined diags ranges</summary>
-    ''' <returns>True if success, False otherwise</returns>
-    Public Function getDiags() As Boolean
-        Dim diagFilename As String = vbNullString, readdir As String
-        Dim ScriptDataRange As Range = Nothing
-        Dim errMsg As String
-
-        readdir = dirglobal
-        For c As Integer = 0 To ScriptDefDic("diags").Length - 1
-            errMsg = prepareParam(c, "diags", ScriptDataRange, diagFilename, readdir, ".png")
-            If Len(errMsg) > 0 Then
-                If Not PyAddin.UserMsg(errMsg,, True) Then Return False
-            End If
-            ' clean previously set shape...
-            For Each oldShape As Shape In ScriptDataRange.Worksheet.Shapes
-                If oldShape.Name = diagFilename Then
-                    oldShape.Delete()
-                    Exit For
-                End If
-            Next
-            ' absolute paths begin with \\ or X:\ -> don't prefix with currWB path, else currWBpath\readdir
-            Dim curWbPrefix As String = IIf(Left(readdir, 2) = "\\" Or Mid(readdir, 2, 2) = ":\", "", currWb.Path + "\")
-            If Not File.Exists(curWbPrefix + readdir + "\" + diagFilename) Then
-                If Not PyAddin.UserMsg("Diagram file '" + curWbPrefix + readdir + "\" + diagFilename + "' not found!",, True) Then Return False
-            End If
-
-            ' add new shape from picture
-            Try
-                With ScriptDataRange.Worksheet.Shapes.AddPicture(Filename:=curWbPrefix + readdir + "\" + diagFilename,
-                    LinkToFile:=Microsoft.Office.Core.MsoTriState.msoFalse, SaveWithDocument:=Microsoft.Office.Core.MsoTriState.msoTrue, Left:=ScriptDataRange.Left, Top:=ScriptDataRange.Top, Width:=-1, Height:=-1)
-                    .Name = diagFilename
-                End With
-                LogInfo("added shape for diagram " + curWbPrefix + readdir + "\" + diagFilename)
-            Catch ex As Exception
-                If Not PyAddin.UserMsg("Error occurred when placing the diagram into target range '" + ScriptDefDic("diags")(c) + "', " + ex.Message,, True) Then Return False
-            End Try
-        Next
-        Return True
-    End Function
-
-    ''' <summary>remove result, diagram and temporary script files</summary>
-    ''' <returns>True if success, False otherwise</returns>
-    Public Function removeFiles() As Boolean
-        Dim filename As String = vbNullString
-        Dim readdir As String = dirglobal
-        Dim ScriptDataRange As Range = Nothing
-        Dim errMsg As String
-
-        ' check for script existence before creating any potential missing folders below...
-        For c As Integer = 0 To ScriptDefDic("scripts").Length - 1
-            ' skip script if defined...
-            If ScriptDefDic("skipscripts")(c) Then Continue For
-            Dim script As String = vbNullString
-            ' returns script and readdir !
-            errMsg = prepareParam(c, "scripts", Nothing, script, readdir, "")
-            If Len(errMsg) > 0 Then
-                If Not PyAddin.UserMsg(errMsg,, True) Then Return False
-            End If
-
-            ' absolute paths begin with \\ or X:\ -> don't prefix with currWB path, else currWBpath\scriptpath
-            Dim curWbPrefix As String = IIf(Left(readdir, 2) = "\\" Or Mid(readdir, 2, 2) = ":\", "", currWb.Path + "\")
-            Dim fullScriptPath = curWbPrefix + readdir
-
-            ' a blank separator indicates additional arguments, separate argument passing because of possible blanks in path -> need quotes around path + scriptname
-            ' assumption: scriptname itself may not have blanks in it.
-            If InStr(script, " ") > 0 Then script = script.Substring(0, InStr(script, " "))
-            If Not File.Exists(fullScriptPath + "\" + script) Then
-                PyAddin.UserMsg("Script '" + fullScriptPath + "\" + script + "' not found!" + vbCrLf, True, True)
-                Return False
-            End If
-            ' check if executable exists or exists somewhere in the path....
-            Dim foundExe As Boolean = False
-            Dim exe As String = Environment.ExpandEnvironmentVariables(ScriptExec)
-            If Not File.Exists(exe) Then
-                If Path.GetDirectoryName(exe) = String.Empty Then
-                    For Each test In (Environment.GetEnvironmentVariable("PATH")).Split(";")
-                        Dim thePath As String = test.Trim()
-                        If Len(thePath) > 0 And File.Exists(Path.Combine(thePath, exe)) Then
-                            foundExe = True
-                            Exit For
-                        End If
-                    Next
-                    If Not foundExe Then
-                        PyAddin.UserMsg("Executable '" + ScriptExec + "' not found!" + vbCrLf, True, True)
-                        Return False
-                    Else
-                        LogInfo("found exec " + ScriptExec)
-                    End If
-                End If
-            End If
-        Next
-
-        ' remove input argument files
-        For c As Integer = 0 To ScriptDefDic("args").Length - 1
-            ' returns filename and readdir !
-            errMsg = prepareParam(c, "args", ScriptDataRange, filename, readdir, ".txt")
-            If Len(errMsg) > 0 Then
-                If Not PyAddin.UserMsg(errMsg,, True) Then Return False
-            End If
-
-            ' absolute paths begin with \\ or X:\ -> don't prefix with currWB path, else currWBpath\argdir
-            Dim curWbPrefix As String = IIf(Left(readdir, 2) = "\\" Or Mid(readdir, 2, 2) = ":\", "", currWb.Path + "\")
-            ' special comfort: if containing folder doesn't exist, create it now:
-            If Not Directory.Exists(curWbPrefix + readdir) Then
-                Try
-                    Directory.CreateDirectory(curWbPrefix + readdir)
-                Catch ex As Exception
-                    If Not PyAddin.UserMsg("Error occurred when trying to create input arguments containing folder '" + curWbPrefix + readdir + "', " + ex.Message,, True) Then Return False
-                End Try
-            End If
-            ' remove any existing input files...
-            If File.Exists(curWbPrefix + readdir + "\" + filename) Then
-                File.Delete(curWbPrefix + readdir + "\" + filename)
-                LogInfo("deleted input " + curWbPrefix + readdir + "\" + filename)
-            End If
-        Next
-
-        ' remove result files
-        For c As Integer = 0 To ScriptDefDic("results").Length - 1
-            ' returns filename and readdir !
-            errMsg = prepareParam(c, "results", ScriptDataRange, filename, readdir, ".txt")
-            If Len(errMsg) > 0 Then
-                If Not PyAddin.UserMsg(errMsg,, True) Then Return False
-            End If
-
-            ' absolute paths begin with \\ or X:\ -> don't prefix with currWB path, else currWBpath\argdir
-            Dim curWbPrefix As String = IIf(Left(readdir, 2) = "\\" Or Mid(readdir, 2, 2) = ":\", "", currWb.Path + "\")
-            ' special comfort: if containing folder doesn't exist, create it now:
-            If Not Directory.Exists(curWbPrefix + readdir) Then
-                Try
-                    Directory.CreateDirectory(curWbPrefix + readdir)
-                Catch ex As Exception
-                    If Not PyAddin.UserMsg("Error occurred when trying to create result containing folder '" + curWbPrefix + readdir + "', " + ex.Message,, True) Then Return False
-                End Try
-            End If
-            ' remove any existing result files...
-            If File.Exists(curWbPrefix + readdir + "\" + filename) Then
-                Try
-                    File.Delete(curWbPrefix + readdir + "\" + filename)
-                    LogInfo("deleted result " + curWbPrefix + readdir + "\" + filename)
-                Catch ex As Exception
-                    If Not PyAddin.UserMsg("Error occurred when trying to remove '" + curWbPrefix + readdir + "\" + filename + "', " + ex.Message,, True) Then Return False
-                End Try
-            End If
-        Next
-
-        ' remove diagram files
-        For c As Integer = 0 To ScriptDefDic("diags").Length - 1
-            ' returns filename and readdir !
-            errMsg = prepareParam(c, "diags", ScriptDataRange, filename, readdir, ".png")
-            If Len(errMsg) > 0 Then
-                If Not PyAddin.UserMsg(errMsg,, True) Then Return False
-            End If
-            ' absolute paths begin with \\ or X:\ -> don't prefix with currWB path, else currWBpath\argdir
-            Dim curWbPrefix As String = IIf(Left(readdir, 2) = "\\" Or Mid(readdir, 2, 2) = ":\", "", currWb.Path + "\")
-            ' special comfort: if containing folder doesn't exist, create it now:
-            If Not Directory.Exists(curWbPrefix + readdir) Then
-                Try
-                    Directory.CreateDirectory(curWbPrefix + readdir)
-                Catch ex As Exception
-                    If Not PyAddin.UserMsg("Error occurred when trying to create diagram container folder '" + curWbPrefix + readdir + "', " + ex.Message,, True) Then Return False
-                End Try
-            End If
-            ' remove any existing diagram files...
-            If File.Exists(curWbPrefix + readdir + "\" + filename) Then
-                Try
-                    File.Delete(curWbPrefix + readdir + "\" + filename)
-                    LogInfo("deleted diagram " + curWbPrefix + readdir + "\" + filename)
-                Catch ex As Exception
-                    If Not PyAddin.UserMsg("Error occurred when trying to remove '" + curWbPrefix + readdir + "\" + filename + "', " + ex.Message,, True) Then Return False
-                End Try
-            End If
-        Next
-
-        ' remove temporary script files
-        For c As Integer = 0 To ScriptDefDic("scriptrng").Length - 1
-            ' returns filename and readdir !
-            errMsg = prepareParam(c, "scriptrng", ScriptDataRange, filename, readdir, ScriptFileSuffix)
-            If Len(errMsg) > 0 Then
-                filename = "ScriptDataRangeRow" + c.ToString() + ScriptFileSuffix
-            End If
-
-            ' absolute paths begin with \\ or X:\ -> don't prefix with currWB path, else currWBpath\argdir
-            Dim curWbPrefix As String = IIf(Left(readdir, 2) = "\\" Or Mid(readdir, 2, 2) = ":\", "", currWb.Path + "\")
-            ' special comfort: if containing folder doesn't exist, create it now:
-            If Not Directory.Exists(curWbPrefix + readdir) Then
-                Try
-                    Directory.CreateDirectory(curWbPrefix + readdir)
-                Catch ex As Exception
-                    If Not PyAddin.UserMsg("Error occurred when trying to create script containing folder '" + curWbPrefix + readdir + "', " + ex.Message,, True) Then Return False
-                End Try
-            End If
-            ' remove any existing diagram files...
-            If File.Exists(curWbPrefix + readdir + "\" + filename) Then
-                Try
-                    File.Delete(curWbPrefix + readdir + "\" + filename)
-                    LogInfo("deleted temporary rscript " + curWbPrefix + readdir + "\" + filename)
-                Catch ex As Exception
-                    If Not PyAddin.UserMsg("Error occurred when trying to remove '" + curWbPrefix + readdir + "\" + filename + "', " + ex.Message,, True) Then Return False
-                End Try
-            End If
-        Next
         Return True
     End Function
 
@@ -916,11 +499,11 @@ Public Module PyAddin
         If nonInteractive Then Return False
         theRibbon.InvalidateControl("showLog")
         If noAvoidChoice Then
-            MsgBox(message, MsgBoxStyle.OkOnly + IIf(IsWarning, MsgBoxStyle.Critical, MsgBoxStyle.Information), "ScriptAddin Message")
+            MsgBox(message, MsgBoxStyle.OkOnly + IIf(IsWarning, MsgBoxStyle.Critical, MsgBoxStyle.Information), "PyAddin Message")
             Return False
         Else
             If avoidFurtherMsgBoxes Then Return True
-            Dim retval As MsgBoxResult = MsgBox(message + vbCrLf + "Avoid further Messages (Yes/No) or abort ScriptDefinition (Cancel)", MsgBoxStyle.YesNoCancel, "ScriptAddin Message")
+            Dim retval As MsgBoxResult = MsgBox(message + vbCrLf + "Avoid further Messages (Yes/No) or abort ScriptDefinition (Cancel)", MsgBoxStyle.YesNoCancel, "PyAddin Message")
             If retval = MsgBoxResult.Yes Then avoidFurtherMsgBoxes = True
             Return (retval = MsgBoxResult.Yes Or retval = MsgBoxResult.No)
         End If
@@ -932,7 +515,7 @@ Public Module PyAddin
     ''' <param name="questionTitle">optionally pass a title for the msgbox instead of default DBAddin Question</param>
     ''' <param name="msgboxIcon">optionally pass a different Msgbox icon (style) instead of default MsgBoxStyle.Question</param>
     ''' <returns>choice as MsgBoxResult (Yes, No, OK, Cancel...)</returns>
-    Public Function QuestionMsg(theMessage As String, Optional questionType As MsgBoxStyle = MsgBoxStyle.OkCancel, Optional questionTitle As String = "ScriptAddin Question", Optional msgboxIcon As MsgBoxStyle = MsgBoxStyle.Question) As MsgBoxResult
+    Public Function QuestionMsg(theMessage As String, Optional questionType As MsgBoxStyle = MsgBoxStyle.OkCancel, Optional questionTitle As String = "PyAddin Question", Optional msgboxIcon As MsgBoxStyle = MsgBoxStyle.Question) As MsgBoxResult
         Dim theMethod As Object = (New System.Diagnostics.StackTrace).GetFrame(1).GetMethod
         Dim caller As String = theMethod.ReflectedType.FullName + "." + theMethod.Name
         WriteToLog(theMessage, If(msgboxIcon = MsgBoxStyle.Critical, EventLogEntryType.Warning, EventLogEntryType.Information), caller) ' to avoid pop up of trace log
@@ -943,7 +526,7 @@ Public Module PyAddin
             If questionType = MsgBoxStyle.RetryCancel Then Return MsgBoxResult.Cancel
         End If
         ' tab is not activated BEFORE Msgbox as Excel first has to get into the interaction thread outside this one..
-        If theRibbon IsNot Nothing Then theRibbon.ActivateTab("ScriptaddinTab")
+        If theRibbon IsNot Nothing Then theRibbon.ActivateTab("PyaddinTab")
         Return MsgBox(theMessage, msgboxIcon + questionType, questionTitle)
     End Function
 
@@ -999,17 +582,17 @@ Public Module PyAddin
         End If
     End Sub
 
-    Public ScriptExecutables As List(Of String)
+    Public PyInstallations As List(Of String)
 
-    ''' <summary>initialize the ScriptExecutables list</summary>
-    Public Sub initScriptExecutables()
+    ''' <summary>initialize the PyInstallations list</summary>
+    Public Sub initPyInstallations()
         Dim AddinAppSettings As NameValueCollection = Nothing
-        Try : AddinAppSettings = ConfigurationManager.AppSettings : Catch ex As Exception : LogWarn("Error reading AppSettings for ScriptExecutables (ExePath) entries: " + ex.Message) : End Try
-        ScriptExecutables = New List(Of String)
+        Try : AddinAppSettings = ConfigurationManager.AppSettings : Catch ex As Exception : LogWarn("Error reading AppSettings for PyInstallations (PyLib) entries: " + ex.Message) : End Try
+        PyInstallations = New List(Of String)
         ' getting User settings might fail (formatting, etc)...
         If Not IsNothing(AddinAppSettings) Then
             For Each key As String In AddinAppSettings.AllKeys
-                If Left(key, 7) = "ExePath" Then ScriptExecutables.Add(key.Substring(7))
+                If LCase(Left(key, 5)) = "pylib" Then PyInstallations.Add(key.Substring(5))
             Next
         End If
         Try : PyAddin.DebugAddin = fetchSetting("DebugAddin", "False") : Catch Ex As Exception : End Try
@@ -1021,19 +604,19 @@ Public Module PyAddin
         If retval = "" Then
             Exit Sub
         Else
-            retval = "Script_" + retval
+            retval = "PyScript_" + retval
         End If
         Dim curCell As Range = ExcelDnaUtil.Application.ActiveCell
         curCell.Value = "dir"
         curCell.Offset(0, 1).Value = "."
 
-        curCell.Offset(1, 0).Value = "type"
-        curCell.Offset(1, 1).Value = "R"
+        curCell.Offset(1, 0).Value = "pyInst"
+        curCell.Offset(1, 1).Value = "Python1"
         curCell.Offset(1, 2).Value = "n"
 
         curCell.Offset(2, 0).Value = "script"
-        curCell.Offset(2, 1).Value = "yourScript.R"
-        curCell.Offset(2, 2).Value = "subfolder\from\Workbook\dir\where\yourScript.R\Is\located"
+        curCell.Offset(2, 1).Value = "yourScript.py"
+        curCell.Offset(2, 2).Value = "subfolder\from\Workbook\dir\where\yourScript.py\Is\located"
 
         curCell.Offset(3, 0).Value = "scriptCell"
         curCell.Offset(3, 1).Value = "# your script code In this cell"
@@ -1043,47 +626,30 @@ Public Module PyAddin
         curCell.Offset(4, 1).Value = "yourScriptCodeInThisRange"
         curCell.Offset(4, 2).Value = "."
 
-        curCell.Offset(5, 0).Value = "arg"
-        curCell.Offset(5, 1).Value = "yourArgInputRange"
-        curCell.Offset(5, 2).Value = "subfolder\from\Workbook\dir\where\tempfile\For\arg\Is\written"
+        curCell.Offset(5, 0).Value = "path"
+        curCell.Offset(5, 1).Value = "your\additional\folder\To\add\To\the\path"
+        curCell.Offset(5, 2).Value = ""
 
-        curCell.Offset(6, 0).Value = "res"
-        curCell.Offset(6, 1).Value = "yourResultOutRange"
-        curCell.Offset(6, 2).Value = "subfolder\from\Workbook\dir\where\tempfile\For\res\Is\expected"
+        curCell.Offset(6, 0).Value = "envvar"
+        curCell.Offset(6, 1).Value = "yourEnvironmentVar1"
+        curCell.Offset(6, 2).Value = "yourEnvironmentVar1Value"
 
-        curCell.Offset(7, 0).Value = "rres"
-        curCell.Offset(7, 1).Value = "yourResultOutRangeBeingRemovedInExcelBeforeRunningScript"
-        curCell.Offset(7, 2).Value = "."
+        curCell.Offset(7, 0).Value = "envvar"
+        curCell.Offset(7, 1).Value = "yourEnvironmentVar2"
+        curCell.Offset(7, 2).Value = "yourEnvironmentVar2Value"
 
-        curCell.Offset(8, 0).Value = "diag"
-        curCell.Offset(8, 1).Value = "yourDiagramPlaceRange"
-        curCell.Offset(8, 2).Value = "subfolder\from\Workbook\dir\where\tempfile\For\diag\Is\expected"
+        curCell.Offset(8, 0).Value = "dir"
+        curCell.Offset(8, 1).Value = "your\scriptfiles\directory\overriding\the\current\workbook\folder"
 
-        curCell.Offset(9, 0).Value = "path"
-        curCell.Offset(9, 1).Value = "your\additional\folder\To\add\To\the\path"
-        curCell.Offset(9, 2).Value = ".R"
-
-        curCell.Offset(10, 0).Value = "envvar"
-        curCell.Offset(10, 1).Value = "yourEnvironmentVar1"
-        curCell.Offset(10, 2).Value = "yourEnvironmentVar1Value"
-
-        curCell.Offset(11, 0).Value = "envvar"
-        curCell.Offset(11, 1).Value = "yourEnvironmentVar2"
-        curCell.Offset(11, 2).Value = "yourEnvironmentVar2Value"
-
-        curCell.Offset(12, 0).Value = "dir"
-        curCell.Offset(12, 1).Value = "your\scriptfiles\directory\overriding\the\current\workbook\folder"
-
-        curCell.Offset(13, 0).Value = "exec"
-        curCell.Offset(13, 1).Value = "yourOwnOverridingExecutable.exe"
-        curCell.Offset(13, 2).Value = "/someSwitchForTheOverridingExecutable"
+        curCell.Offset(9, 0).Value = "pylib"
+        curCell.Offset(9, 1).Value = "yourOwnOverridingPython.dll"
         Try
             ExcelDnaUtil.Application.ActiveSheet.Range(curCell, curCell.Offset(13, 2)).Name = retval
         Catch ex As Exception
             UserMsg("Couldn't name example definitions as '" + retval + "': " + ex.Message)
         End Try
         ExcelDnaUtil.Application.ActiveSheet.Range(curCell, curCell.Offset(0, 2)).EntireColumn.AutoFit
-        PyAddin.initScriptExecutables()
+        PyAddin.initPyInstallations()
         Dim errStr As String = PyAddin.startScriptNamesRefresh()
         If Len(errStr) > 0 Then PyAddin.UserMsg("refresh Error: " & errStr, True, True)
     End Sub

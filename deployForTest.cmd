@@ -11,12 +11,14 @@ if exist "C:\Program Files\Microsoft Office\root\" (
 	copy /Y %source%\PyAddin.pdb "%appdata%\Microsoft\AddIns"
 	copy /Y %source%\PyAddin.dll.config "%appdata%\Microsoft\AddIns\PyAddin.xll.config"
 	copy /Y PyAddinCentral.config "%appdata%\Microsoft\AddIns\PyAddinCentral.config"
+	copy /Y PyAddinUser.config "%appdata%\Microsoft\AddIns\PyAddinUser.config"
 ) else (
 	echo 32bit office
 	copy /Y %source%\PyAddin-AddIn-packed.xll "%appdata%\Microsoft\AddIns\PyAddin.xll"
 	copy /Y %source%\PyAddin.pdb "%appdata%\Microsoft\AddIns"
 	copy /Y %source%\PyAddin.dll.config "%appdata%\Microsoft\AddIns\PyAddin.xll.config"
 	copy /Y PyAddinCentral.config "%appdata%\Microsoft\AddIns\PyAddinCentral.config"
+	copy /Y PyAddinUser.config "%appdata%\Microsoft\AddIns\PyAddinUser.config"
 )
 set source=bin\Release
 If "%answr%"=="r" (

@@ -59,7 +59,7 @@ Public NotInheritable Class AboutBox1
     ''' <param name="sender"></param>
     ''' <param name="e"></param>
     Private Sub refreshScriptDef_Click(sender As Object, e As EventArgs) Handles refreshScriptDef.Click
-        PyAddin.initScriptExecutables()
+        PyAddin.initPyInstallations()
         Dim errStr As String = PyAddin.startScriptNamesRefresh()
         If Len(errStr) > 0 Then
             PyAddin.UserMsg("refresh Error: " & errStr, True, True)

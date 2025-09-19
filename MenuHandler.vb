@@ -12,15 +12,15 @@ Imports System.Configuration
 Public Class MenuHandler
     Inherits ExcelRibbon
     ''' <summary>the selected index of the script executable (R, Python,...)</summary>
-    Public selectedScriptExecutable As Integer
+    Public selectedPyExecutable As Integer
 
     ''' <summary></summary>
     Public Sub ribbonLoaded(myribbon As IRibbonUI)
         PyAddin.theRibbon = myribbon
         PyAddin.debugScript = CBool(PyAddin.fetchSetting("debugScript", "False"))
-        selectedScriptExecutable = CInt(PyAddin.fetchSetting("selectedScriptExecutable", "0"))
+        selectedPyExecutable = CInt(PyAddin.fetchSetting("selectedPyExecutable", "0"))
         PyAddin.WarningIssued = False
-        If PyAddin.ScriptExecutables.Count > 0 Then PyAddin.ScriptType = PyAddin.ScriptExecutables(selectedScriptExecutable)
+        If PyAddin.PyInstallations.Count > 0 Then PyAddin.PyInstallation = PyAddin.PyInstallations(selectedPyExecutable)
     End Sub
 
     ''' <summary>creates the Ribbon</summary>
@@ -30,7 +30,7 @@ Public Class MenuHandler
         "<ribbon><tabs><tab id='PyaddinTab' label='PyAddin'>" +
             "<group id='PyaddinGroup' label='General settings'>" +
               "<dropDown id='scriptDropDown' label='ScriptDefinition:' sizeString='12345678901234567890' getItemCount='GetItemCount' getItemID='GetItemID' getItemLabel='GetItemLabel' getSelectedItemIndex='GetSelectedScript' onAction='selectItem'/>" +
-              "<dropDown id='execDropDown' label='PyExecutable:' sizeString='12345678901234' getItemCount='GetItemCountExec' getItemID='GetItemIDExec' getItemLabel='GetItemLabelExec' getSelectedItemIndex='GetSelectedExec' onAction='selectItemExec'/>" +
+              "<dropDown id='pyInstDropDown' label='PyInstallation:' sizeString='12345678901234' getItemCount='GetItemCountExec' getItemID='GetItemIDExec' getItemLabel='GetItemLabelExec' getSelectedItemIndex='GetSelectedExec' onAction='selectItemExec'/>" +
               "<buttonGroup id='butGrp'>" +
                 "<menu id='configMenu' label='Settings'>" +
                   "<button id='insExample' label='insert Example' tag='5' screentip='insert an Example Script Range' imageMso='SignatureLineInsert' onAction='insertExample'/>" +
@@ -85,7 +85,7 @@ Public Class MenuHandler
             ConfigurationManager.RefreshSection("UserSettings")
         End If
         ' reflect changes in settings
-        initScriptExecutables()
+        initPyInstallations()
         ' also display in ribbon
         theRibbon.Invalidate()
         turnOffDesignMode()
@@ -100,7 +100,6 @@ Public Class MenuHandler
             createCButton(control.Tag, control.Id)
             Exit Sub
         End If
-        PyAddin.SkipScriptAndPreparation = My.Computer.Keyboard.CtrlKeyDown
         Dim origSelection As Range = ExcelDna.Integration.ExcelDnaUtil.Application.Selection
         Try
             PyAddin.ScriptDefinitionRange.Parent.Select()
@@ -273,14 +272,14 @@ Public Class MenuHandler
     ''' <summary></summary>
     ''' <returns></returns>
     Public Function GetItemCountExec(control As IRibbonControl) As Integer
-        Return ScriptExecutables.Count
+        Return PyInstallations.Count
     End Function
 
     ''' <summary></summary>
     ''' <returns></returns>
     Public Function GetItemLabelExec(control As IRibbonControl, index As Integer) As String
-        If ScriptExecutables.Count > 0 Then
-            Return ScriptExecutables(index)
+        If PyInstallations.Count > 0 Then
+            Return PyInstallations(index)
         Else
             Return ""
         End If
@@ -289,8 +288,8 @@ Public Class MenuHandler
     ''' <summary></summary>
     ''' <returns></returns>
     Public Function GetItemIDExec(control As IRibbonControl, index As Integer) As String
-        If ScriptExecutables.Count > 0 Then
-            Return ScriptExecutables(index)
+        If PyInstallations.Count > 0 Then
+            Return PyInstallations(index)
         Else
             Return ""
         End If
@@ -299,14 +298,15 @@ Public Class MenuHandler
     ''' <summary>after selection of executable used to return the selected executable for display</summary>
     ''' <returns></returns>
     Public Function GetSelectedExec(control As IRibbonControl) As Integer
-        Return selectedScriptExecutable
+        Return selectedPyExecutable
     End Function
 
     ''' <summary>select a script executable from the ScriptExecutable dropdown</summary>
     Public Sub selectItemExec(control As IRibbonControl, id As String, index As Integer)
-        selectedScriptExecutable = index
-        PyAddin.ScriptType = PyAddin.ScriptExecutables(selectedScriptExecutable)
-        PyAddin.setUserSetting("selectedScriptExecutable", index.ToString())
+        selectedPyExecutable = index
+        PyAddin.PyInstallation = PyAddin.PyInstallations(selectedPyExecutable)
+        PyAddin.setUserSetting("selectedPyExecutable", index.ToString())
+        PythonCaller.InitPython()
         turnOffDesignMode()
     End Sub
 

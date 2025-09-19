@@ -51,40 +51,12 @@ Public Class PyOutput
         ' This call is required by the designer.
         InitializeComponent()
 
-        ' Add any initialization after the InitializeComponent() call.
         Try
-            Dim args As String = PyAddin.ScriptExecArgs + " """ + PyAddin.fullScriptPath + "\" + PyAddin.script + """ " + PyAddin.scriptarguments
             Directory.SetCurrentDirectory(PyAddin.fullScriptPath)
-            Dim pstartInfo = New ProcessStartInfo With {
-                .FileName = PyAddin.ScriptExec,
-                .Arguments = args,
-                .RedirectStandardOutput = True,
-                .RedirectStandardError = True,
-                .RedirectStandardInput = True,
-                .CreateNoWindow = True,
-                .UseShellExecute = False,
-                .WorkingDirectory = PyAddin.fullScriptPath,
-                .WindowStyle = ProcessWindowStyle.Hidden
-            }
+            PythonCaller.CallPythonScript(PyAddin.fullScriptPath + "\" + PyAddin.script)
 
-            pstartInfo.EnvironmentVariables.Item("PATH") = pstartInfo.EnvironmentVariables.Item("PATH") + ";" + PyAddin.ScriptExecAddPath
-            For Each varKey As String In PyAddin.ScriptExecAddEnvironVars.Keys
-                pstartInfo.EnvironmentVariables.Item(varKey) = PyAddin.ScriptExecAddEnvironVars(varKey)
-            Next
-
-            cmd = New Process With {
-                .StartInfo = pstartInfo,
-                .EnableRaisingEvents = True
-            }
-            AddHandler cmd.OutputDataReceived, AddressOf myOutHandler
-            AddHandler cmd.ErrorDataReceived, AddressOf myErrHandler
-            AddHandler cmd.Exited, AddressOf myExitHandler
-
-            Dim result As Boolean = cmd.Start()
-            cmd.BeginOutputReadLine()
-            cmd.BeginErrorReadLine()
         Catch ex As Exception
-            PyAddin.UserMsg("Error occurred when invoking script '" + PyAddin.fullScriptPath + "\" + PyAddin.script + "', using '" + PyAddin.ScriptExec + "'" + ex.Message + vbCrLf, True, True)
+            PyAddin.UserMsg("Error occurred when invoking script '" + PyAddin.fullScriptPath + "\" + PyAddin.script + "', using '" + PyAddin.PyLib + "'" + ex.Message + vbCrLf, True, True)
             Me.errMsg = ex.Message
         End Try
 
@@ -113,6 +85,8 @@ Public Class PyOutput
         appendAction.Invoke(msgtext + vbCrLf, fgColWin, bgColWin)
     End Sub
 
+    'redirect stdout/err
+    'https://stackoverflow.com/questions/37289082/redirect-stdout-stderr-from-python-embedded-in-net-application-to-text-box/76120954#76120954
     Private Sub myErrHandler(sender As Object, e As DataReceivedEventArgs)
         If IsNothing(e.Data) Then Exit Sub
         Dim appendAction As Action(Of String, System.Drawing.Color, System.Drawing.Color) = AddressOf appendTxt
@@ -127,7 +101,7 @@ Public Class PyOutput
     End Sub
 
     Private Sub myExitHandler(sender As Object, e As System.EventArgs)
-        LogInfo("finished " + PyAddin.fullScriptPath + "\" + PyAddin.script + "', using '" + PyAddin.ScriptExec + "'")
+        LogInfo("finished " + PyAddin.fullScriptPath + "\" + PyAddin.script + "', using '" + PyAddin.PyLib + "'")
         ' need this line to wait for stdout/stderr to finish writing...
         Try : cmd.WaitForExit() : Catch ex As Exception
             LogWarn("cmd.WaitForExit exception " + ex.Message)
@@ -173,7 +147,7 @@ Public Class PyOutput
 
     Private Sub ScriptOutput_Closing(sender As Object, e As CancelEventArgs) Handles Me.Closing
         If Not IsNothing(cmd) Then
-            LogInfo("terminating " + PyAddin.fullScriptPath + "\" + PyAddin.script + "', using '" + PyAddin.ScriptExec + "'")
+            LogInfo("terminating " + PyAddin.fullScriptPath + "\" + PyAddin.script + "', using '" + PyAddin.PyLib + "'")
             ' check if process has not exited
             Dim procFinished As Boolean = False
             Try : procFinished = cmd.HasExited : Catch ex As Exception : End Try
